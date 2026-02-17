@@ -1,0 +1,20 @@
+description = "Archive the current active orchestration session"
+
+prompt = """Archive the current active orchestration session.
+
+Activate the `session-management` skill and follow its archive protocol.
+
+## Execution
+
+1. Check for an active session at `.gemini/state/active-session.md`
+2. If no active session exists, inform the user that there is nothing to archive
+3. If an active session exists:
+   - Read the session state and present a brief summary of what will be archived
+   - Ask the user to confirm archival (the session may have incomplete phases)
+   - Execute the archive protocol from the session-management skill:
+     - Move design document to `.gemini/plans/archive/`
+     - Move implementation plan to `.gemini/plans/archive/`
+     - Update session status to `completed`
+     - Move session state to `.gemini/state/archive/<session-id>.md`
+   - Verify archival was successful (no active-session.md remains)
+   - Confirm to the user with a summary of what was archived"""

@@ -1,0 +1,25 @@
+description = "Display the current orchestration session status"
+
+prompt = """Display the current orchestration session status.
+
+## Session State
+
+@{.gemini/state/active-session.md}
+
+## Instructions
+
+Parse the session state above and present a concise status summary:
+
+1. **Session ID** and creation timestamp
+2. **Overall status** (in_progress, completed, failed)
+3. **Phase breakdown** with status indicators:
+   - Completed phases (with completion timestamps)
+   - Current active phase
+   - Pending phases
+   - Failed phases with error summaries
+4. **File manifest**: count of files created, modified, deleted so far
+5. **Token usage**: total and top agents by consumption
+6. **Errors**: any unresolved errors with brief descriptions
+
+This is a read-only command. Do NOT modify the session state or continue execution.
+If no active session exists, inform the user and suggest using `/maestro.orchestrate` to start one."""

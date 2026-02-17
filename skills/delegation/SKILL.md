@@ -1,0 +1,290 @@
+---
+name: delegation
+description: Agent delegation best practices for constructing effective subagent prompts with proper scoping
+---
+
+# Delegation Skill
+
+Activate this skill when delegating work to subagents during orchestration execution. This skill provides the templates, rules, and patterns for constructing effective delegation prompts that produce consistent, high-quality results.
+
+## Protocol Injection
+
+Before constructing any delegation prompt, inject the shared agent base protocol:
+
+### Injection Steps
+1. Read `protocols/agent-base-protocol.md`
+2. Read `protocols/filesystem-safety-protocol.md`
+3. Prepend both protocols to the delegation prompt (base protocol first, then filesystem safety) — these appear before the task-specific content
+4. For each phase listed in the current phase's `blocked_by`, read `phases[].downstream_context` from session state and include it in the prompt
+5. If any required `downstream_context` is missing, include an explicit placeholder noting the missing dependency context (never omit silently)
+
+The injected protocol ensures every agent follows consistent pre-work procedures and output formatting regardless of their specialization.
+
+### Context Chain Construction
+
+Every delegation prompt must include a context chain that connects the current phase to prior work:
+
+**Phase Context**: Include Downstream Context blocks from all completed phases that the current phase depends on (identified via `blocked_by` relationships in the implementation plan and sourced from session state `phases[].downstream_context`):
+```
+Context from completed phases:
+- Phase [N] ([agent]): [Downstream Context summary]
+  - Interfaces introduced: [list with file locations]
+  - Patterns established: [list]
+  - Integration points: [specific files, functions, endpoints]
+  - Warnings: [list]
+```
+
+**Accumulated Patterns**: Naming conventions, directory organization patterns, and architectural decisions established by earlier phases. This ensures phase 5 does not contradict patterns set in phase 2.
+
+**File Manifest**: Complete list of files created or modified in prior phases, so the agent knows what already exists and can import from or extend those files.
+
+**Missing Context Fallback**: If a blocked dependency has no stored downstream context, include a visible placeholder entry in the prompt:
+`- Phase [N] ([agent]): Downstream Context missing in session state — verify dependency output before implementation`
+
+### Downstream Consumer Declaration
+
+Every delegation prompt must declare who will consume the agent's output:
+```
+Your output will be consumed by: [downstream agent name(s)] who need [specific information they require]
+```
+
+This primes the agent to structure their Downstream Context section for maximum utility to the next agent in the chain.
+
+## Settings Override Application
+
+Before constructing any delegation prompt, resolve configurable parameters:
+
+1. Read the agent's base definition frontmatter (`model`, `temperature`, `max_turns`, `timeout_mins`)
+2. Apply environment variable overrides per the orchestrator's Delegation Override Protocol:
+   - `MAESTRO_DEFAULT_MODEL` → overrides `model` for all agents
+   - `MAESTRO_WRITER_MODEL` → overrides `model` for `technical-writer` only (takes precedence over `MAESTRO_DEFAULT_MODEL`)
+   - `MAESTRO_DEFAULT_TEMPERATURE` → overrides `temperature` for all agents
+   - `MAESTRO_MAX_TURNS` → overrides `max_turns` for all agents
+   - `MAESTRO_AGENT_TIMEOUT` → overrides `timeout_mins` for all agents
+3. Include resolved values in the delegation prompt metadata:
+   ```
+   Agent: [agent-name]
+   Model: [resolved model]
+   Temperature: [resolved temperature]
+   Max Turns: [resolved max_turns]
+   Timeout: [resolved timeout] minutes
+   ```
+4. If the agent appears in `MAESTRO_DISABLED_AGENTS`, do not construct a delegation prompt — report to the orchestrator that the agent is disabled
+
+### Override Precedence
+
+Agent-specific env var > General env var > Agent frontmatter default
+
+Example: For `technical-writer`, if both `MAESTRO_DEFAULT_MODEL=gemini-2.5-pro` and `MAESTRO_WRITER_MODEL=gemini-3-flash-preview` are set, use `gemini-3-flash-preview`.
+
+
+## Delegation Prompt Template
+
+Every delegation to a subagent must follow this structure:
+
+```
+Task: [One-line description of what to accomplish]
+
+Progress: Phase [N] of [M]: [Phase Name]
+
+Files to modify:
+- /absolute/path/to/file1.ext: [Specific change required]
+- /absolute/path/to/file2.ext: [Specific change required]
+
+Files to create:
+- /absolute/path/to/new-file.ext: [Purpose and key contents]
+
+Deliverables:
+- [Concrete output 1]
+- [Concrete output 2]
+
+Validation: [command to run after completion, e.g., "npm run lint && npm run test"]
+
+Context:
+[Relevant information from the design document or previous phases]
+
+Do NOT:
+- [Explicit exclusion 1]
+- [Explicit exclusion 2]
+- Modify any files not listed above
+```
+
+## Scope Boundary Rules
+
+### Absolute Paths
+Always provide absolute file paths in delegation prompts. Never use relative paths or expect agents to search for files.
+
+For parallel dispatch, the dispatch script automatically prepends the project root directory to every prompt as a safety net. However, delegation prompts should still use absolute paths — the injected root is a fallback for resilience, not a substitute for explicit path construction.
+
+### Specific Deliverables
+Define exactly what the agent should produce. Vague instructions like "implement the feature" lead to inconsistent results. Instead: "Create UserService class with createUser(), getUserById(), and deleteUser() methods implementing the IUserService interface."
+
+### Validation Criteria
+Include the exact command(s) to run after completion. The agent should run these and report results. Examples:
+- `npm run lint && npm run test`
+- `cargo build && cargo test`
+- `go vet ./... && go test ./...`
+- `python -m pytest tests/`
+
+### Exclusions
+Explicitly state what the agent must NOT do:
+- Files it must not modify
+- Dependencies it must not add
+- Patterns it must not introduce
+- Scope it must not exceed
+
+## Agent Selection Guide
+
+| Task Domain | Agent | Key Capability |
+|-------------|-------|---------------|
+| System architecture, component design | architect | Read-only analysis, architecture patterns |
+| API contracts, endpoint design | api-designer | Read-only, REST/GraphQL expertise |
+| Feature implementation, coding | coder | Full read/write/shell access |
+| Code quality assessment | code-reviewer | Read-only, verified findings |
+| Database schema, queries, ETL | data-engineer | Full read/write/shell access |
+| Bug investigation, root cause | debugger | Read + shell for investigation |
+| CI/CD, infrastructure, deployment | devops-engineer | Full read/write/shell access |
+| Performance analysis, profiling | performance-engineer | Read + shell for profiling |
+| Code restructuring, modernization | refactor | Read/write, no shell |
+| Security assessment, vulnerability | security-engineer | Read + shell for scanning |
+| Test creation, TDD, coverage | tester | Full read/write/shell access |
+| Documentation, READMEs, guides | technical-writer | Read/write, no shell |
+
+## Parallel Delegation
+
+Parallel delegation uses `scripts/parallel-dispatch.sh` to spawn independent `gemini` CLI processes. Instead of calling `delegate_to_agent` (which is sequential), the orchestrator writes prompt files to disk and invokes the dispatch script.
+
+### Prompt File Construction
+
+For each agent in a parallel batch, write a complete prompt file to `<state_dir>/parallel/<batch-id>/prompts/<agent-name>.txt`:
+
+```
+[Injected base protocol from protocols/agent-base-protocol.md]
+
+Task: [One-line description]
+
+Progress: Phase [N] of [M]: [Phase Name] (parallel batch with [other agent names])
+
+Files to modify:
+- /absolute/path/to/file1.ext: [Specific change required]
+
+Files to create:
+- /absolute/path/to/new-file.ext: [Purpose and key contents]
+
+Context from completed phases:
+- Phase [N] ([agent]): [Downstream Context summary]
+
+Your output will be consumed by: [downstream agent name(s)]
+
+Deliverables:
+- [Concrete output 1]
+
+Validation: [command to run after completion]
+
+Do NOT:
+- Modify any files not listed above
+- Ask follow-up questions (you are running non-interactively)
+- Create git commits (the orchestrator handles commits after the batch)
+```
+
+Each prompt must be **fully self-contained** — the agent runs as an independent `gemini` process with no access to the orchestrator's conversation or session context.
+
+### Agent Name Rules
+
+Prompt filenames must follow these rules:
+
+- Use **hyphens**, not underscores: `technical-writer.txt`, not `technical_writer.txt`
+- The filename (minus `.txt` extension) must exactly match an agent definition filename in `agents/`
+- The dispatch script validates agent names at runtime and rejects unrecognized names with a list of available agents
+- This validation catches typos before they waste an API call and a timeout window
+
+### Tool Restriction Enforcement
+
+Parallel-dispatched agents run with `--yolo` (auto-approve all tool calls), which bypasses the tool permission model defined in agent frontmatter. To enforce least-privilege, every parallel dispatch prompt **must** include an explicit tool restriction block. The required prompt structure is:
+
+1. Agent Base Protocol (from `protocols/agent-base-protocol.md`)
+2. Filesystem Safety Protocol (from `protocols/filesystem-safety-protocol.md`)
+3. **TOOL RESTRICTIONS block (immediately here, before any task content)**
+4. **FILE WRITING RULES block (immediately after tool restrictions)**
+5. Context chain from prior phases
+6. Task-specific instructions
+7. Scope boundaries and prohibitions
+
+The tool restriction block template:
+
+```
+TOOL RESTRICTIONS (MANDATORY):
+You are authorized to use ONLY the following tools: [list from agent frontmatter].
+Do NOT use any tools not listed above. Specifically:
+- Do NOT use write_file or replace unless explicitly authorized above
+- Do NOT use run_shell_command unless explicitly authorized above
+- Do NOT create, modify, or delete files unless authorized above
+Violation of these restrictions constitutes a security boundary breach.
+```
+
+Populate the tool list by reading the agent's definition file (`agents/<agent-name>.md`) and extracting the `tools` array from the YAML frontmatter. This is the only mechanism for enforcing tool permissions on parallel-dispatched agents until the Gemini CLI supports runtime tool restriction flags.
+
+The file writing rules block template:
+
+```
+FILE WRITING RULES (MANDATORY):
+Use ONLY `write_file` to create files and `replace` to modify files.
+Do NOT use run_shell_command with cat, echo, printf, heredocs, or shell redirection (>, >>) to write file content.
+Shell interpretation corrupts YAML, Markdown, and special characters. This rule has NO exceptions.
+```
+
+This block reinforces the Agent Base Protocol's File Writing Rule directly in every delegation prompt, ensuring agents see the prohibition even if they skim the injected protocols.
+
+### Dispatch Invocation
+
+```bash
+./scripts/parallel-dispatch.sh <state_dir>/parallel/<batch-id>
+```
+
+The script handles spawning, waiting, timeout enforcement, and result collection. See `scripts/parallel-dispatch.sh` for the full implementation.
+
+### Non-Overlapping File Ownership
+When delegating to multiple agents in parallel, ensure no two agents are assigned the same file. Each file must have exactly one owner in a parallel batch.
+
+### Batch Completion Gates
+All agents in a parallel batch must complete before:
+- The next batch of phases begins
+- Shared/container files are updated
+- Validation checkpoints run
+- The orchestrator creates a git commit for the batch
+
+### Conflict Prevention
+- Assign non-overlapping file sets to each agent
+- Reserve shared files (barrel exports, configuration, dependency manifests) for a single agent or a post-batch update step
+- If two phases must modify the same file, they cannot run in parallel — execute them sequentially
+- Parallel agents must NOT create git commits — the orchestrator commits after validating the batch
+
+## Validation Criteria Templates
+
+### For Implementation Agents (coder, data-engineer, devops-engineer)
+```
+Validation: [build command] && [lint command] && [test command]
+```
+
+### For Refactoring Agents (refactor)
+```
+Validation: [build command] && [test command]
+Verify: No behavior changes — all existing tests must still pass
+```
+
+### For Test Agents (tester)
+```
+Validation: [test command]
+Verify: All new tests pass, report coverage metrics
+```
+
+### For Read-Only Agents (architect, api-designer, code-reviewer, debugger, performance-engineer, security-engineer)
+```
+Validation: N/A (read-only assessment)
+Verify: Findings reference specific files and line numbers
+```
+
+### For Documentation Agents (technical-writer)
+```
+Validation: Verify all links resolve, code examples are syntactically valid
+```

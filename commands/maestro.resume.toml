@@ -1,0 +1,29 @@
+description = "Resume an interrupted orchestration session"
+
+prompt = """Resume the Maestro orchestration session.
+
+Activate the `session-management` and `execution` skills.
+
+## Session State
+
+@{.gemini/state/active-session.md}
+
+## Resume Protocol
+
+1. Parse the session state above to determine:
+   - session_id and overall status
+   - current_phase and which phases are completed
+   - Any errors from previous execution
+   - File manifest of changes made so far
+   - Token usage to date
+2. Present a concise status summary to the user:
+   - Session ID and creation timestamp
+   - Phase-by-phase status (completed, in_progress, failed, pending)
+   - Any unresolved errors
+   - What will happen next
+3. If errors exist from the last run, present them and ask for guidance before retrying
+4. Continue execution from the last active/pending phase using the execution skill's protocols
+5. Activate the `delegation` skill when delegating to subagents
+6. Activate the `validation` skill to verify phase outputs
+
+If no active session exists, inform the user and suggest using `/maestro.orchestrate` to start one."""
